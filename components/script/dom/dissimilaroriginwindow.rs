@@ -179,12 +179,13 @@ impl DissimilarOriginWindowMethods<crate::DomTypeHolder> for DissimilarOriginWin
         // TODO: Implement x-origin opener
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-window-blur
+    /// Implements <https://html.spec.whatwg.org/multipage/#dom-window-blur>.
     fn Blur(&self) {
-        // TODO: Implement x-origin blur
+        // > User agents are encouraged to ignore calls to this `blur()` method
+        // > entirely.
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-focus
+    /// Implements <https://html.spec.whatwg.org/multipage/#dom-window-focus>.
     fn Focus(&self) {
         // TODO: Implement x-origin focus
     }
