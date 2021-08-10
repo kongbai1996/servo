@@ -1657,6 +1657,7 @@ impl ScriptThread {
                 UpdateHistoryState(id, ..) => Some(id),
                 RemoveHistoryStates(id, ..) => Some(id),
                 FocusIFrame(id, ..) => Some(id),
+                FocusDocument(id) => Some(id),
                 WebDriverScriptCommand(id, ..) => Some(id),
                 TickAllAnimations(id, ..) => Some(id),
                 WebFontLoaded(id) => Some(id),
@@ -1929,8 +1930,11 @@ impl ScriptThread {
             ScriptThreadMessage::FocusIFrame(parent_pipeline_id, frame_id) => {
                 self.handle_focus_iframe_msg(parent_pipeline_id, frame_id, can_gc)
             },
-            ScriptThreadMessage::WebDriverScriptCommand(pipeline_id, msg) => {
-                self.handle_webdriver_msg(pipeline_id, msg, can_gc)
+            ConstellationControlMsg::FocusDocument(pipeline_id) => {
+                self.handle_focus_document_msg(pipeline_id)
+            },
+            ConstellationControlMsg::WebDriverScriptCommand(pipeline_id, msg) => {
+                self.handle_webdriver_msg(pipeline_id, msg)
             },
             ScriptThreadMessage::WebFontLoaded(pipeline_id, success) => {
                 self.handle_web_font_loaded(pipeline_id, success)
@@ -2643,19 +2647,16 @@ impl ScriptThread {
             .borrow()
             .find_document(parent_pipeline_id)
             .unwrap();
+        let frame_element = doc.find_iframe(browsing_context_id);
 
-        let Some(iframe_element_root) = ({
-            // Enclose `iframes()` call and create a new root to avoid retaining
-            // borrow.
-            let iframes = document.iframes();
-            iframes
-                .get(browsing_context_id)
-                .map(|iframe| DomRoot::from_ref(iframe.element.upcast()))
-        }) else {
-            return;
-        };
+        if let Some(ref frame_element) = frame_element {
+            doc.request_focus(Some(frame_element.upcast()), FocusType::Parent);
+        }
+    }
 
-        document.request_focus(Some(&iframe_element_root), FocusType::Parent, can_gc);
+    fn handle_focus_document_msg(&self, pipeline_id: PipelineId) {
+        let doc = self.documents.borrow().find_document(pipeline_id).unwrap();
+        doc.request_focus(None, FocusType::Child);
     }
 
     fn handle_post_message_msg(
