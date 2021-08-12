@@ -1225,7 +1225,7 @@ impl Document {
         }
 
         // Commit the implicit focus transaction
-        self.commit_focus_transaction(FocusType::Parent);
+        self.commit_focus_transaction(FocusInitiator::Remote);
     }
 
     /// Initiate a new round of checking for elements requesting focus. The last element to call
@@ -1256,13 +1256,13 @@ impl Document {
     ///
     /// If there's no ongoing transaction, this method automatically starts and
     /// commits an implicit transaction.
-    pub(crate) fn request_focus(&self, elem: Option<&Element>, focus_type: FocusType) {
+    pub(crate) fn request_focus(&self, elem: Option<&Element>, focus_initiator: FocusInitiator) {
         let implicit_transaction = self.focus_transaction.borrow().is_none();
 
         self.begin_focus_transaction_and_request_focus(elem);
 
         if implicit_transaction && self.focus_transaction.borrow().is_some() {
-            self.commit_focus_transaction(focus_type);
+            self.commit_focus_transaction(focus_initiator);
         }
     }
 
@@ -1316,12 +1316,12 @@ impl Document {
         }
 
         // Commit the implicit focus transaction
-        self.commit_focus_transaction(FocusType::Parent);
+        self.commit_focus_transaction(FocusInitiator::Remote);
     }
 
     /// Reassign the focus context to the element that last requested focus during this
     /// transaction, or the document if no elements requested it.
-    fn commit_focus_transaction(&self, focus_type: FocusType) {
+    fn commit_focus_transaction(&self, focus_initiator: FocusInitiator) {
         let (mut new_focused, new_system_focus_state, new_focus_state) = {
             let focus_transaction = self.focus_transaction.borrow();
             let focus_transaction = focus_transaction
@@ -1442,7 +1442,7 @@ impl Document {
             }
         }
 
-        if focus_type == FocusType::Element {
+        if focus_initiator == FocusInitiator::Local {
             assert!(
                 new_focus_state,
                 "Can't initiate a focus operation that would lose \
@@ -1631,7 +1631,7 @@ impl Document {
 
         if let MouseEventType::Click = mouse_event_type {
             if self.focus_transaction.borrow().is_some() {
-                self.commit_focus_transaction(FocusType::Element);
+                self.commit_focus_transaction(FocusInitiator::Local);
             }
             self.maybe_fire_dblclick(client_point, node, pressed_mouse_buttons);
         }
@@ -6676,8 +6676,7 @@ pub(crate) fn determine_policy_for_token(token: &str) -> ReferrerPolicy {
     }
 }
 
-/// Specifies the relationship to the focus operation that led to the current
-/// focus transaction.
+/// Specifies the initiator of a focus operation.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FocusType {
     Element, // The first focus message - focus the element itself
