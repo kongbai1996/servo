@@ -1251,28 +1251,42 @@ impl Document {
         )
     }
 
-    /// Request that the given element receive focus once the current transaction is complete.
-    /// If None is passed, then whatever element is currently focused will no longer be focused
-    /// once the transaction is complete.
+    /// Request that the given element receive focus once the current
+    /// transaction is complete. `None` specifies to focus the document.
+    ///
+    /// If there's no ongoing transaction, this method automatically starts and
+    /// commits an implicit transaction.
     pub(crate) fn request_focus(&self, elem: Option<&Element>, focus_type: FocusType) {
+        let implicit_transaction = self.focus_transaction.borrow().is_none();
+
+        self.begin_focus_transaction_and_request_focus(elem);
+
+        if implicit_transaction && self.focus_transaction.borrow().is_some() {
+            self.commit_focus_transaction(focus_type);
+        }
+    }
+
+    /// Similar to [`Self::request_focus`] but does not commit the implicit
+    /// transaction.
+    ///
+    /// Note that this method does nothing and does not start an implicit
+    /// transaction if the specified element is not focusable.
+    pub(crate) fn begin_focus_transaction_and_request_focus(&self, elem: Option<&Element>) {
         // If an element is specified, and it's non-focusable, ignore the
         // request.
         if !elem.map_or(true, |e| e.is_focusable_area()) {
             return;
         }
 
-        let implicit_transaction = self.focus_transaction.borrow().is_none();
-        if implicit_transaction {
+        if self.focus_transaction.borrow().is_none() {
             self.begin_focus_transaction();
         }
+
         {
             let mut focus_transaction = self.focus_transaction.borrow_mut();
             let focus_transaction = focus_transaction.as_mut().unwrap();
             focus_transaction.element = elem.map(Dom::from_ref);
             focus_transaction.has_focus = true;
-        }
-        if implicit_transaction {
-            self.commit_focus_transaction(focus_type, can_gc);
         }
     }
 
@@ -1428,8 +1442,12 @@ impl Document {
             }
         }
 
-        if focus_type == FocusType::Element && new_focus_state {
-            // FIXME: Why check `new_focus_state` here?
+        if focus_type == FocusType::Element {
+            assert!(
+                new_focus_state,
+                "Can't initiate a focus operation that would lose \
+                this document's focus"
+            );
 
             // Update the focus state for all elements in the focus chain.
             // https://html.spec.whatwg.org/multipage/#focus-chain
@@ -1574,8 +1592,7 @@ impl Document {
                 return;
             }
 
-            self.begin_focus_transaction();
-            self.request_focus(Some(&*el), FocusType::Element, can_gc);
+            self.begin_focus_transaction_and_request_focus(Some(&*el));
         }
 
         let dom_event = DomRoot::upcast::<Event>(MouseEvent::for_platform_mouse_event(
@@ -1612,14 +1629,11 @@ impl Document {
             },
         }
 
-        if let MouseButtonAction::Click = event.action {
-            self.commit_focus_transaction(FocusType::Element, can_gc);
-            self.maybe_fire_dblclick(
-                hit_test_result.point_in_viewport,
-                node,
-                pressed_mouse_buttons,
-                can_gc,
-            );
+        if let MouseEventType::Click = mouse_event_type {
+            if self.focus_transaction.borrow().is_some() {
+                self.commit_focus_transaction(FocusType::Element);
+            }
+            self.maybe_fire_dblclick(client_point, node, pressed_mouse_buttons);
         }
 
         // When the contextmenu event is triggered by right mouse button
