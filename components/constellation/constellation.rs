@@ -239,7 +239,10 @@ struct WebView {
     /// context.
     focused_browsing_context_id: BrowsingContextId,
 
-    /// The joint session history for this webview.
+    /// The system focus state for this browser.
+    has_system_focus: bool,
+
+    /// The joint session history for this browser.
     session_history: JointSessionHistory,
 }
 
@@ -1432,14 +1435,11 @@ where
             EmbedderToConstellationMessage::MediaSessionAction(action) => {
                 self.handle_media_session_action_msg(action);
             },
-            EmbedderToConstellationMessage::SetWebViewThrottled(webview_id, throttled) => {
-                self.set_webview_throttled(webview_id, throttled);
+            FromCompositorMsg::ChangeBrowserVisibility(top_level_browsing_context_id, visible) => {
+                self.handle_change_browser_visibility(top_level_browsing_context_id, visible);
             },
-            EmbedderToConstellationMessage::SetScrollStates(pipeline_id, scroll_states) => {
-                self.handle_set_scroll_states(pipeline_id, scroll_states)
-            },
-            EmbedderToConstellationMessage::PaintMetric(pipeline_id, paint_metric_event) => {
-                self.handle_paint_metric(pipeline_id, paint_metric_event);
+            FromCompositorMsg::Focus(top_level_browsing_context_id, new_system_focus_state) => {
+                self.handle_system_focus(top_level_browsing_context_id, new_system_focus_state);
             },
         }
     }
@@ -3061,6 +3061,7 @@ where
             webview_id,
             WebView {
                 focused_browsing_context_id: browsing_context_id,
+                has_system_focus: true,
                 session_history: JointSessionHistory::new(),
             },
         );
@@ -3455,6 +3456,7 @@ where
             new_webview_id,
             WebView {
                 focused_browsing_context_id: new_browsing_context_id,
+                has_system_focus: true,
                 session_history: JointSessionHistory::new(),
             },
         );
@@ -4062,7 +4064,8 @@ where
                 ));
             }
 
-            new_pipeline.set_throttled(false);
+            new_pipeline.notify_visibility(true);
+            self.notify_focus_state(new_pipeline_id);
         }
 
         self.update_activity(old_pipeline_id);
@@ -4611,16 +4614,61 @@ where
             },
         };
         match self.pipelines.get(&pipeline_id) {
-            None => warn!("{pipeline_id}: Tried to SetWebViewThrottled after closure"),
-            Some(pipeline) => pipeline.set_throttled(throttled),
+            None => {
+                return warn!(
+                    "Pipeline {} got visibility change event after closure.",
+                    pipeline_id
+                )
+            },
+            Some(pipeline) => pipeline.notify_visibility(visible),
+        };
+    }
+
+    /// Handles [`FromCompositorMsg::Focus`].
+    fn handle_system_focus(
+        &mut self,
+        top_level_browsing_context_id: TopLevelBrowsingContextId,
+        new_system_focus_state: bool,
+    ) {
+        debug!(
+            "Top-level browsing context {} {} a system focus; notifying all of \
+            its active pipelines about that",
+            top_level_browsing_context_id,
+            ["lost", "got"][new_system_focus_state as usize]
+        );
+
+        if let Some(browser) = self.browsers.get_mut(&top_level_browsing_context_id) {
+            browser.has_system_focus = new_system_focus_state;
+        } else {
+            return warn!(
+                "Top-level browsing context {} does not exist",
+                top_level_browsing_context_id
+            );
+        }
+
+        for browsing_context in
+            self.fully_active_browsing_contexts_iter(top_level_browsing_context_id)
+        {
+            let pipeline_id = browsing_context.pipeline_id;
+            trace!(
+                "Sending SystemFocus(_, {}) to pipeline {}.",
+                browsing_context.id,
+                pipeline_id
+            );
+
+            let pipeline = match self.pipelines.get(&pipeline_id) {
+                Some(pipeline) => pipeline,
+                None => {
+                    warn!("Pipeline {} is already closed", pipeline_id);
+                    continue;
+                },
+            };
+
+            pipeline.notify_system_focus(new_system_focus_state);
         }
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(skip_all, fields(servo_profiling = true), level = "trace")
-    )]
-    fn notify_history_changed(&self, webview_id: WebViewId) {
+    fn notify_history_changed(&self, top_level_browsing_context_id: TopLevelBrowsingContextId) {
         // Send a flat projection of the history to embedder.
         // The final vector is a concatenation of the URLs of the past
         // entries, the current entry and the future entries.
@@ -4922,14 +4970,38 @@ where
             self.trim_history(top_level_id);
         }
 
-        self.notify_history_changed(change.webview_id);
-        self.update_webview_in_compositor(change.webview_id);
+        self.notify_focus_state(change.new_pipeline_id);
+
+        self.notify_history_changed(change.top_level_browsing_context_id);
+        self.update_frame_tree_if_active(change.top_level_browsing_context_id);
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(skip_all, fields(servo_profiling = true), level = "trace")
-    )]
+    /// Update the focus state of the specified pipeline that recently became
+    /// active and may have out-dated information.
+    fn notify_focus_state(&mut self, pipeline_id: PipelineId) {
+        let pipeline = match self.pipelines.get(&pipeline_id) {
+            Some(pipeline) => pipeline,
+            None => return warn!("Pipeline {} is closed", pipeline_id),
+        };
+
+        let system_focus_state;
+
+        match self.browsers.get(&pipeline.top_level_browsing_context_id) {
+            Some(browser) => {
+                system_focus_state = browser.has_system_focus;
+            },
+            None => {
+                return warn!(
+                    "Pipeline {}'s top-level browsing context {} is closed",
+                    pipeline_id, pipeline.top_level_browsing_context_id
+                )
+            },
+        }
+
+        // Advertise the system focus state of its top-level browsing context
+        pipeline.notify_system_focus(system_focus_state);
+    }
+
     fn focused_browsing_context_is_descendant_of(
         &self,
         browsing_context_id: BrowsingContextId,
@@ -5568,15 +5640,22 @@ where
         }
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(skip_all, fields(servo_profiling = true), level = "trace")
-    )]
-    fn get_joint_session_history(&mut self, top_level_id: WebViewId) -> &mut JointSessionHistory {
-        self.webviews
-            .get_mut(top_level_id)
-            .map(|webview| &mut webview.session_history)
-            .expect("Unknown top-level browsing context")
+    fn get_joint_session_history(
+        &mut self,
+        top_level_id: TopLevelBrowsingContextId,
+    ) -> &mut JointSessionHistory {
+        &mut self
+            .browsers
+            .entry(top_level_id)
+            // This shouldn't be necessary since `get_joint_session_history` is
+            // invoked for existing browsers but we need this to satisfy the
+            // type system.
+            .or_insert_with(|| Browser {
+                focused_browsing_context_id: BrowsingContextId::from(top_level_id),
+                has_system_focus: true,
+                session_history: JointSessionHistory::new(),
+            })
+            .session_history
     }
 
     // Convert a browsing context to a sendable form to pass to the compositor

@@ -1587,7 +1587,106 @@ impl ScriptThread {
             },
             #[cfg(feature = "webgpu")]
             MixedMessage::FromWebGPUServer(_) => ScriptThreadEventCategory::WebGPUMsg,
-            MixedMessage::TimerFired => ScriptThreadEventCategory::TimerEvent,
+        }
+    }
+
+    fn notify_activity_to_hang_monitor(&self, category: &ScriptThreadEventCategory) {
+        let hang_annotation = match category {
+            ScriptThreadEventCategory::AttachLayout => ScriptHangAnnotation::AttachLayout,
+            ScriptThreadEventCategory::ConstellationMsg => ScriptHangAnnotation::ConstellationMsg,
+            ScriptThreadEventCategory::DevtoolsMsg => ScriptHangAnnotation::DevtoolsMsg,
+            ScriptThreadEventCategory::DocumentEvent => ScriptHangAnnotation::DocumentEvent,
+            ScriptThreadEventCategory::DomEvent => ScriptHangAnnotation::DomEvent,
+            ScriptThreadEventCategory::FileRead => ScriptHangAnnotation::FileRead,
+            ScriptThreadEventCategory::FormPlannedNavigation => {
+                ScriptHangAnnotation::FormPlannedNavigation
+            },
+            ScriptThreadEventCategory::HistoryEvent => ScriptHangAnnotation::HistoryEvent,
+            ScriptThreadEventCategory::ImageCacheMsg => ScriptHangAnnotation::ImageCacheMsg,
+            ScriptThreadEventCategory::InputEvent => ScriptHangAnnotation::InputEvent,
+            ScriptThreadEventCategory::NetworkEvent => ScriptHangAnnotation::NetworkEvent,
+            ScriptThreadEventCategory::Resize => ScriptHangAnnotation::Resize,
+            ScriptThreadEventCategory::ScriptEvent => ScriptHangAnnotation::ScriptEvent,
+            ScriptThreadEventCategory::SetScrollState => ScriptHangAnnotation::SetScrollState,
+            ScriptThreadEventCategory::SetViewport => ScriptHangAnnotation::SetViewport,
+            ScriptThreadEventCategory::StylesheetLoad => ScriptHangAnnotation::StylesheetLoad,
+            ScriptThreadEventCategory::TimerEvent => ScriptHangAnnotation::TimerEvent,
+            ScriptThreadEventCategory::UpdateReplacedElement => {
+                ScriptHangAnnotation::UpdateReplacedElement
+            },
+            ScriptThreadEventCategory::WebSocketEvent => ScriptHangAnnotation::WebSocketEvent,
+            ScriptThreadEventCategory::WorkerEvent => ScriptHangAnnotation::WorkerEvent,
+            ScriptThreadEventCategory::WorkletEvent => ScriptHangAnnotation::WorkletEvent,
+            ScriptThreadEventCategory::ServiceWorkerEvent => {
+                ScriptHangAnnotation::ServiceWorkerEvent
+            },
+            ScriptThreadEventCategory::EnterFullscreen => ScriptHangAnnotation::EnterFullscreen,
+            ScriptThreadEventCategory::ExitFullscreen => ScriptHangAnnotation::ExitFullscreen,
+            ScriptThreadEventCategory::PerformanceTimelineTask => {
+                ScriptHangAnnotation::PerformanceTimelineTask
+            },
+            ScriptThreadEventCategory::PortMessage => ScriptHangAnnotation::PortMessage,
+            ScriptThreadEventCategory::WebGPUMsg => ScriptHangAnnotation::WebGPUMsg,
+        };
+        self.background_hang_monitor
+            .notify_activity(HangAnnotation::Script(hang_annotation));
+    }
+
+    fn message_to_pipeline(&self, msg: &MixedMessage) -> Option<PipelineId> {
+        use script_traits::ConstellationControlMsg::*;
+        match *msg {
+            MixedMessage::FromConstellation(ref inner_msg) => match *inner_msg {
+                StopDelayingLoadEventsMode(id) => Some(id),
+                NavigationResponse(id, _) => Some(id),
+                AttachLayout(ref new_layout_info) => Some(new_layout_info.new_pipeline_id),
+                Resize(id, ..) => Some(id),
+                ResizeInactive(id, ..) => Some(id),
+                UnloadDocument(id) => Some(id),
+                ExitPipeline(id, ..) => Some(id),
+                ExitScriptThread => None,
+                SendEvent(id, ..) => Some(id),
+                Viewport(id, ..) => Some(id),
+                SetScrollState(id, ..) => Some(id),
+                GetTitle(id) => Some(id),
+                SetDocumentActivity(id, ..) => Some(id),
+                ChangeFrameVisibilityStatus(id, ..) => Some(id),
+                NotifyVisibilityChange(id, ..) => Some(id),
+                NavigateIframe(id, ..) => Some(id),
+                PostMessage { target: id, .. } => Some(id),
+                UpdatePipelineId(_, _, _, id, _) => Some(id),
+                UpdateHistoryState(id, ..) => Some(id),
+                RemoveHistoryStates(id, ..) => Some(id),
+                FocusIFrame(id, ..) => Some(id),
+                WebDriverScriptCommand(id, ..) => Some(id),
+                TickAllAnimations(id, ..) => Some(id),
+                WebFontLoaded(id) => Some(id),
+                DispatchIFrameLoadEvent {
+                    target: _,
+                    parent: id,
+                    child: _,
+                } => Some(id),
+                DispatchStorageEvent(id, ..) => Some(id),
+                ReportCSSError(id, ..) => Some(id),
+                Reload(id, ..) => Some(id),
+                PaintMetric(..) => None,
+                ExitFullScreen(id, ..) => Some(id),
+                MediaSessionAction(..) => None,
+                SetWebGPUPort(..) => None,
+                SystemFocus(id, ..) => Some(id),
+            },
+            MixedMessage::FromDevtools(_) => None,
+            MixedMessage::FromScript(ref inner_msg) => match *inner_msg {
+                MainThreadScriptMsg::Common(CommonScriptMsg::Task(_, _, pipeline_id, _)) => {
+                    pipeline_id
+                },
+                MainThreadScriptMsg::Common(CommonScriptMsg::CollectReports(_)) => None,
+                MainThreadScriptMsg::WorkletLoaded(pipeline_id) => Some(pipeline_id),
+                MainThreadScriptMsg::RegisterPaintWorklet { pipeline_id, .. } => Some(pipeline_id),
+                MainThreadScriptMsg::Inactive => None,
+                MainThreadScriptMsg::WakeUp => None,
+            },
+            MixedMessage::FromImageCache((pipeline_id, _)) => Some(pipeline_id),
+            MixedMessage::FromWebGPUServer(..) => None,
         }
     }
 
@@ -1876,13 +1975,15 @@ impl ScriptThread {
                 *self.receivers.webgpu_receiver.borrow_mut() =
                     ROUTER.route_ipc_receiver_to_new_crossbeam_receiver(port);
             },
-            msg @ ScriptThreadMessage::AttachLayout(..) |
-            msg @ ScriptThreadMessage::Viewport(..) |
-            msg @ ScriptThreadMessage::Resize(..) |
-            msg @ ScriptThreadMessage::ExitFullScreen(..) |
-            msg @ ScriptThreadMessage::SendInputEvent(..) |
-            msg @ ScriptThreadMessage::TickAllAnimations(..) |
-            msg @ ScriptThreadMessage::ExitScriptThread => {
+            ConstellationControlMsg::SystemFocus(pipeline_id, new_system_focus_state) => {
+                self.handle_system_focus(pipeline_id, new_system_focus_state)
+            },
+            msg @ ConstellationControlMsg::AttachLayout(..) |
+            msg @ ConstellationControlMsg::Viewport(..) |
+            msg @ ConstellationControlMsg::SetScrollState(..) |
+            msg @ ConstellationControlMsg::Resize(..) |
+            msg @ ConstellationControlMsg::ExitFullScreen(..) |
+            msg @ ConstellationControlMsg::ExitScriptThread => {
                 panic!("should have handled {:?} already", msg)
             },
             ScriptThreadMessage::SetScrollStates(pipeline_id, scroll_states) => {
@@ -3728,8 +3829,16 @@ impl ScriptThread {
         };
     }
 
-    pub(crate) fn enqueue_microtask(job: Microtask) {
-        with_script_thread(|script_thread| {
+    fn handle_system_focus(&self, pipeline_id: PipelineId, new_system_focus_state: bool) {
+        let document = self.documents.borrow().find_document(pipeline_id);
+        if let Some(document) = document {
+            // TODO
+        }
+    }
+
+    pub fn enqueue_microtask(job: Microtask) {
+        SCRIPT_THREAD_ROOT.with(|root| {
+            let script_thread = unsafe { &*root.get().unwrap() };
             script_thread
                 .microtask_queue
                 .enqueue(job, script_thread.get_cx());

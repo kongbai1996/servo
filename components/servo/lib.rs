@@ -724,21 +724,22 @@ impl Servo {
                     }
                 }
             },
-            EmbedderMsg::WebViewBlurred => {
-                for id in self.webviews.borrow().keys() {
-                    if let Some(webview) = self.get_webview_handle(*id) {
-                        webview.set_focused(false);
-                    }
+
+            WindowEvent::Quit => {
+                self.compositor.maybe_start_shutting_down();
+            },
+
+            WindowEvent::Focus(top_level_browsing_context_id, new_focus_state) => {
+                let msg = ConstellationMsg::Focus(top_level_browsing_context_id, new_focus_state);
+                if let Err(e) = self.constellation_chan.send(msg) {
+                    warn!("Sending Focus message to constellation failed ({:?}).", e);
                 }
             },
-            EmbedderMsg::AllowUnload(webview_id, response_sender) => {
-                if let Some(webview) = self.get_webview_handle(webview_id) {
-                    let request = AllowOrDenyRequest::new(
-                        response_sender,
-                        AllowOrDeny::Allow,
-                        self.servo_errors.sender(),
-                    );
-                    webview.delegate().request_unload(webview, request);
+
+            WindowEvent::ExitFullScreen(top_level_browsing_context_id) => {
+                let msg = ConstellationMsg::ExitFullScreen(top_level_browsing_context_id);
+                if let Err(e) = self.constellation_chan.send(msg) {
+                    warn!("Sending exit fullscreen to constellation failed ({:?}).", e);
                 }
             },
             EmbedderMsg::Keyboard(webview_id, keyboard_event) => {
