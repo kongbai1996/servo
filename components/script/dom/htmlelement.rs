@@ -419,9 +419,10 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-blur
-    fn Blur(&self, can_gc: CanGc) {
-        // TODO: Run the unfocusing steps.
-        if !self.as_element().focus_state() {
+    fn Blur(&self) {
+        // TODO: Run the unfocusing steps. Focus the top-level document, not
+        //       the current document.
+        if !self.upcast::<Element>().focus_state() {
             return;
         }
         // https://html.spec.whatwg.org/multipage/#unfocusing-steps
