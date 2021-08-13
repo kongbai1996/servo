@@ -154,9 +154,104 @@ use crate::script_module::ScriptFetchOptions;
 use crate::script_runtime::{
     CanGc, JSContext, JSContextHelper, Runtime, ScriptThreadEventCategory, ThreadSafeJSContext,
 };
-use crate::task_queue::TaskQueue;
-use crate::task_source::{SendableTaskSource, TaskSourceName};
-use crate::{devtools, webdriver_handlers};
+use crate::script_runtime::{CommonScriptMsg, ScriptChan, ScriptThreadEventCategory};
+use crate::task_manager::TaskManager;
+use crate::task_queue::{QueuedTask, QueuedTaskConversion, TaskQueue};
+use crate::task_source::dom_manipulation::DOMManipulationTaskSource;
+use crate::task_source::file_reading::FileReadingTaskSource;
+use crate::task_source::history_traversal::HistoryTraversalTaskSource;
+use crate::task_source::media_element::MediaElementTaskSource;
+use crate::task_source::networking::NetworkingTaskSource;
+use crate::task_source::performance_timeline::PerformanceTimelineTaskSource;
+use crate::task_source::port_message::PortMessageQueue;
+use crate::task_source::remote_event::RemoteEventTaskSource;
+use crate::task_source::timer::TimerTaskSource;
+use crate::task_source::user_interaction::UserInteractionTaskSource;
+use crate::task_source::websocket::WebsocketTaskSource;
+use crate::task_source::TaskSource;
+use crate::task_source::TaskSourceName;
+use crate::webdriver_handlers;
+use bluetooth_traits::BluetoothRequest;
+use canvas_traits::webgl::WebGLPipeline;
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use devtools_traits::CSSError;
+use devtools_traits::{DevtoolScriptControlMsg, DevtoolsPageInfo};
+use devtools_traits::{NavigationState, ScriptToDevtoolsControlMsg, WorkerId};
+use embedder_traits::{EmbedderMsg, EventLoopWaker};
+use euclid::default::{Point2D, Rect};
+use euclid::Vector2D;
+use headers::ReferrerPolicy as ReferrerPolicyHeader;
+use headers::{HeaderMapExt, LastModified};
+use hyper_serde::Serde;
+use ipc_channel::ipc::{self, IpcSender};
+use ipc_channel::router::ROUTER;
+use js::glue::GetWindowProxyClass;
+use js::jsapi::{
+    JSContext as UnsafeJSContext, JSTracer, JS_AddInterruptCallback, SetWindowProxyClass,
+};
+use js::jsval::UndefinedValue;
+use js::rust::ParentRuntime;
+use media::WindowGLContext;
+use metrics::{PaintTimeMetrics, MAX_TASK_NS};
+use mime::{self, Mime};
+use msg::constellation_msg::{
+    BackgroundHangMonitor, BackgroundHangMonitorExitSignal, BackgroundHangMonitorRegister,
+    ScriptHangAnnotation,
+};
+use msg::constellation_msg::{BrowsingContextId, HistoryStateId, PipelineId};
+use msg::constellation_msg::{HangAnnotation, MonitoredComponentId, MonitoredComponentType};
+use msg::constellation_msg::{PipelineNamespace, TopLevelBrowsingContextId};
+use net_traits::image_cache::{ImageCache, PendingImageResponse};
+use net_traits::request::{CredentialsMode, Destination, RedirectMode, RequestBuilder};
+use net_traits::storage_thread::StorageType;
+use net_traits::{FetchMetadata, FetchResponseListener, FetchResponseMsg};
+use net_traits::{
+    Metadata, NetworkError, ReferrerPolicy, ResourceFetchTiming, ResourceThreads,
+    ResourceTimingType,
+};
+use parking_lot::Mutex;
+use percent_encoding::percent_decode;
+use profile_traits::mem::{self as profile_mem, OpaqueSender, ReportsChan};
+use profile_traits::time::{self as profile_time, profile, ProfilerCategory};
+use script_layout_interface::message::{self, LayoutThreadInit, Msg, ReflowGoal};
+use script_traits::webdriver_msg::WebDriverScriptCommand;
+use script_traits::CompositorEvent::{
+    CompositionEvent, IMEDismissedEvent, KeyboardEvent, MouseButtonEvent, MouseMoveEvent,
+    ResizeEvent, TouchEvent, WheelEvent,
+};
+use script_traits::{
+    AnimationTickType, CompositorEvent, ConstellationControlMsg, DiscardBrowsingContext,
+    DocumentActivity, EventResult, FocusSequenceNumber, HistoryEntryReplacement,
+    InitialScriptState, JsEvalResult, LayoutMsg, LoadData, LoadOrigin, MediaSessionActionType,
+    MouseButton, MouseEventType, NewLayoutInfo, Painter, ProgressiveWebMetricType, ScriptMsg,
+    ScriptThreadFactory, ScriptToConstellationChan, StructuredSerializedData, TimerSchedulerMsg,
+    TouchEventType, TouchId, UntrustedNodeAddress, UpdatePipelineIdReason, WebrenderIpcSender,
+    WheelDelta, WindowSizeData, WindowSizeType,
+};
+use servo_atoms::Atom;
+use servo_config::opts;
+use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
+use std::borrow::Cow;
+use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::{hash_map, HashMap, HashSet};
+use std::default::Default;
+use std::ops::Deref;
+use std::option::Option;
+use std::ptr;
+use std::rc::Rc;
+use std::result::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, SystemTime};
+use style::dom::OpaqueNode;
+use style::thread_state::{self, ThreadState};
+use time::{at_utc, get_time, precise_time_ns, Timespec};
+use url::Position;
+use webgpu::identity::WebGPUMsg;
+use webrender_api::units::LayoutPixel;
+use webrender_api::DocumentId;
 
 thread_local!(static SCRIPT_THREAD_ROOT: Cell<Option<*const ScriptThread>> = const { Cell::new(None) });
 
@@ -1657,7 +1752,7 @@ impl ScriptThread {
                 UpdateHistoryState(id, ..) => Some(id),
                 RemoveHistoryStates(id, ..) => Some(id),
                 FocusIFrame(id, ..) => Some(id),
-                FocusDocument(id) => Some(id),
+                FocusDocument(id, ..) => Some(id),
                 WebDriverScriptCommand(id, ..) => Some(id),
                 TickAllAnimations(id, ..) => Some(id),
                 WebFontLoaded(id) => Some(id),
@@ -1927,11 +2022,11 @@ impl ScriptThread {
             ScriptThreadMessage::RemoveHistoryStates(pipeline_id, history_states) => {
                 self.handle_remove_history_states(pipeline_id, history_states)
             },
-            ScriptThreadMessage::FocusIFrame(parent_pipeline_id, frame_id) => {
-                self.handle_focus_iframe_msg(parent_pipeline_id, frame_id, can_gc)
+            ConstellationControlMsg::FocusIFrame(parent_pipeline_id, frame_id, sequence) => {
+                self.handle_focus_iframe_msg(parent_pipeline_id, frame_id, sequence)
             },
-            ConstellationControlMsg::FocusDocument(pipeline_id) => {
-                self.handle_focus_document_msg(pipeline_id)
+            ConstellationControlMsg::FocusDocument(pipeline_id, sequence) => {
+                self.handle_focus_document_msg(pipeline_id, sequence)
             },
             ConstellationControlMsg::WebDriverScriptCommand(pipeline_id, msg) => {
                 self.handle_webdriver_msg(pipeline_id, msg)
@@ -2640,7 +2735,7 @@ impl ScriptThread {
         &self,
         parent_pipeline_id: PipelineId,
         browsing_context_id: BrowsingContextId,
-        can_gc: CanGc,
+        sequence: FocusSequenceNumber,
     ) {
         let document = self
             .documents
@@ -2649,13 +2744,32 @@ impl ScriptThread {
             .unwrap();
         let frame_element = doc.find_iframe(browsing_context_id);
 
+        if doc.get_focus_sequence() > sequence {
+            debug!(
+                "Disregarding the FocusIFrame message because the contained sequence number is \
+                too old ({:?} < {:?})",
+                sequence,
+                doc.get_focus_sequence()
+            );
+            return;
+        }
+
         if let Some(ref frame_element) = frame_element {
             doc.request_focus(Some(frame_element.upcast()), FocusType::Parent);
         }
     }
 
-    fn handle_focus_document_msg(&self, pipeline_id: PipelineId) {
+    fn handle_focus_document_msg(&self, pipeline_id: PipelineId, sequence: FocusSequenceNumber) {
         let doc = self.documents.borrow().find_document(pipeline_id).unwrap();
+        if doc.get_focus_sequence() > sequence {
+            debug!(
+                "Disregarding the FocusDocument message because the contained sequence number is \
+                too old ({:?} < {:?})",
+                sequence,
+                doc.get_focus_sequence()
+            );
+            return;
+        }
         doc.request_focus(None, FocusType::Child);
     }
 

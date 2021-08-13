@@ -29,9 +29,113 @@
 //! The `unsafe_no_jsmanaged_fields!()` macro adds an empty implementation of
 //! `JSTraceable` to a datatype.
 
-use std::collections::HashMap;
-use std::collections::hash_map::RandomState;
-use std::fmt::Display;
+use crate::dom::bindings::cell::DomRefCell;
+use crate::dom::bindings::error::Error;
+use crate::dom::bindings::refcounted::{Trusted, TrustedPromise};
+use crate::dom::bindings::reflector::{DomObject, Reflector};
+use crate::dom::bindings::root::{Dom, DomRoot};
+use crate::dom::bindings::str::{DOMString, USVString};
+use crate::dom::bindings::utils::WindowProxyHandler;
+use crate::dom::gpubuffer::GPUBufferState;
+use crate::dom::gpucanvascontext::WebGPUContextId;
+use crate::dom::gpucommandencoder::GPUCommandEncoderState;
+use crate::dom::htmlimageelement::SourceSet;
+use crate::dom::htmlmediaelement::{HTMLMediaElementFetchContext, MediaFrameRenderer};
+use crate::dom::identityhub::Identities;
+use crate::script_runtime::{ContextForRequestInterrupt, StreamConsumer};
+use crate::script_thread::IncompleteParserContexts;
+use crate::task::TaskBox;
+use app_units::Au;
+use canvas_traits::canvas::{
+    CanvasGradientStop, CanvasId, LinearGradientStyle, RadialGradientStyle,
+};
+use canvas_traits::canvas::{
+    CompositionOrBlending, Direction, LineCapStyle, LineJoinStyle, RepetitionStyle, TextAlign,
+    TextBaseline,
+};
+use canvas_traits::webgl::WebGLVertexArrayId;
+use canvas_traits::webgl::{
+    ActiveAttribInfo, ActiveUniformBlockInfo, ActiveUniformInfo, GlType, TexDataType, TexFormat,
+};
+use canvas_traits::webgl::{GLLimits, WebGLQueryId, WebGLSamplerId};
+use canvas_traits::webgl::{WebGLBufferId, WebGLChan, WebGLContextId, WebGLError};
+use canvas_traits::webgl::{WebGLFramebufferId, WebGLMsgSender, WebGLPipeline, WebGLProgramId};
+use canvas_traits::webgl::{WebGLReceiver, WebGLRenderbufferId, WebGLSLVersion, WebGLSender};
+use canvas_traits::webgl::{WebGLShaderId, WebGLSyncId, WebGLTextureId, WebGLVersion};
+use content_security_policy::CspList;
+use crossbeam_channel::{Receiver, Sender};
+use cssparser::RGBA;
+use devtools_traits::{CSSError, TimelineMarkerType, WorkerId};
+use embedder_traits::{EventLoopWaker, MediaMetadata};
+use encoding_rs::{Decoder, Encoding};
+use euclid::default::{Point2D, Rect, Rotation3D, Transform2D};
+use euclid::Length as EuclidLength;
+use html5ever::buffer_queue::BufferQueue;
+use html5ever::{LocalName, Namespace, Prefix, QualName};
+use http::header::HeaderMap;
+use hyper::Method;
+use hyper::StatusCode;
+use indexmap::IndexMap;
+use ipc_channel::ipc::{IpcReceiver, IpcSender};
+use js::glue::{CallObjectTracer, CallScriptTracer, CallStringTracer, CallValueTracer};
+use js::jsapi::{
+    GCTraceKindToAscii, Heap, JSObject, JSScript, JSString, JSTracer, JobQueue, TraceKind,
+};
+use js::jsval::JSVal;
+use js::rust::{GCMethods, Handle, Runtime};
+use js::typedarray::TypedArray;
+use js::typedarray::TypedArrayElement;
+use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
+use media::WindowGLContext;
+use metrics::{InteractiveMetrics, InteractiveWindow};
+use mime::Mime;
+use msg::constellation_msg::{
+    BlobId, BroadcastChannelRouterId, BrowsingContextId, HistoryStateId, MessagePortId,
+    MessagePortRouterId, PipelineId, TopLevelBrowsingContextId,
+};
+use msg::constellation_msg::{ServiceWorkerId, ServiceWorkerRegistrationId};
+use net_traits::filemanager_thread::RelativePos;
+use net_traits::image::base::{Image, ImageMetadata};
+use net_traits::image_cache::{ImageCache, PendingImageId};
+use net_traits::request::{CredentialsMode, ParserMetadata, Referrer, Request, RequestBuilder};
+use net_traits::response::HttpsState;
+use net_traits::response::{Response, ResponseBody};
+use net_traits::storage_thread::StorageType;
+use net_traits::{Metadata, NetworkError, ReferrerPolicy, ResourceFetchTiming, ResourceThreads};
+use parking_lot::{Mutex as ParkMutex, RwLock};
+use profile_traits::mem::ProfilerChan as MemProfilerChan;
+use profile_traits::time::ProfilerChan as TimeProfilerChan;
+use script_layout_interface::message::PendingRestyle;
+use script_layout_interface::rpc::LayoutRPC;
+use script_layout_interface::StyleAndOpaqueLayoutData;
+use script_traits::serializable::BlobImpl;
+use script_traits::transferable::MessagePortImpl;
+use script_traits::{
+    DocumentActivity, DrawAPaintImageResult, FocusSequenceNumber, MediaSessionActionType,
+    ScriptToConstellationChan, TimerEventId, TimerSource, UntrustedNodeAddress, WebrenderIpcSender,
+    WindowSizeData, WindowSizeType,
+};
+use selectors::matching::ElementSelectorFlags;
+use serde::{Deserialize, Serialize};
+use servo_arc::Arc as ServoArc;
+use servo_atoms::Atom;
+use servo_media::audio::analyser_node::AnalysisEngine;
+use servo_media::audio::buffer_source_node::AudioBuffer;
+use servo_media::audio::context::AudioContext;
+use servo_media::audio::graph::NodeId;
+use servo_media::audio::panner_node::{DistanceModel, PanningModel};
+use servo_media::audio::param::ParamType;
+use servo_media::player::audio::AudioRenderer;
+use servo_media::player::video::VideoFrame;
+use servo_media::player::Player;
+use servo_media::streams::registry::MediaStreamId;
+use servo_media::streams::MediaStreamType;
+use servo_media::webrtc::WebRtcController;
+use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
+use smallvec::SmallVec;
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell, UnsafeCell};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{BuildHasher, Hash};
 
 /// A trait to allow tracing (only) DOM objects.
@@ -252,7 +356,25 @@ unsafe impl<T: JSTraceable> JSTraceable for DomRefCell<T> {
 }
 
 unsafe_no_jsmanaged_fields!(TrustedPromise);
-
+unsafe_no_jsmanaged_fields!(PropertyDeclarationBlock);
+unsafe_no_jsmanaged_fields!(Font);
+// These three are interdependent, if you plan to put jsmanaged data
+// in one of these make sure it is propagated properly to containing structs
+unsafe_no_jsmanaged_fields!(DocumentActivity, WindowSizeData, WindowSizeType);
+unsafe_no_jsmanaged_fields!(
+    BrowsingContextId,
+    HistoryStateId,
+    PipelineId,
+    TopLevelBrowsingContextId
+);
+unsafe_no_jsmanaged_fields!(TimerEventId, TimerSource);
+unsafe_no_jsmanaged_fields!(TimelineMarkerType);
+unsafe_no_jsmanaged_fields!(WorkerId);
+unsafe_no_jsmanaged_fields!(FocusSequenceNumber);
+unsafe_no_jsmanaged_fields!(BufferQueue, QuirksMode, StrTendril);
+unsafe_no_jsmanaged_fields!(Runtime);
+unsafe_no_jsmanaged_fields!(ContextForRequestInterrupt);
+unsafe_no_jsmanaged_fields!(HeaderMap, Method);
 unsafe_no_jsmanaged_fields!(WindowProxyHandler);
 unsafe_no_jsmanaged_fields!(SourceSet);
 unsafe_no_jsmanaged_fields!(HTMLMediaElementFetchContext);

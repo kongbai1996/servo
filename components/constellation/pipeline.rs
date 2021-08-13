@@ -2,7 +2,50 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::collections::HashSet;
+use crate::event_loop::EventLoop;
+use crate::sandboxing::{spawn_multiprocess, UnprivilegedContent};
+use background_hang_monitor::HangMonitorRegister;
+use bluetooth_traits::BluetoothRequest;
+use canvas_traits::webgl::WebGLPipeline;
+use compositing::compositor_thread::Msg as CompositorMsg;
+use compositing::CompositionPipeline;
+use compositing::CompositorProxy;
+use crossbeam_channel::{unbounded, Sender};
+use devtools_traits::{DevtoolsControlMsg, ScriptToDevtoolsControlMsg};
+use embedder_traits::EventLoopWaker;
+use gfx::font_cache_thread::FontCacheThread;
+use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
+use ipc_channel::router::ROUTER;
+use ipc_channel::Error;
+use layout_traits::LayoutThreadFactory;
+use media::WindowGLContext;
+use metrics::PaintTimeMetrics;
+use msg::constellation_msg::TopLevelBrowsingContextId;
+use msg::constellation_msg::{
+    BackgroundHangMonitorControlMsg, BackgroundHangMonitorRegister, HangMonitorAlert,
+};
+use msg::constellation_msg::{BrowsingContextId, HistoryStateId};
+use msg::constellation_msg::{
+    PipelineId, PipelineNamespace, PipelineNamespaceId, PipelineNamespaceRequest,
+};
+use net::image_cache::ImageCacheImpl;
+use net_traits::image_cache::ImageCache;
+use net_traits::ResourceThreads;
+use profile_traits::mem as profile_mem;
+use profile_traits::time;
+use script_traits::{
+    AnimationState, ConstellationControlMsg, DiscardBrowsingContext, FocusSequenceNumber,
+    ScriptToConstellationChan,
+};
+use script_traits::{DocumentActivity, InitialScriptState};
+use script_traits::{LayoutControlMsg, LayoutMsg, LoadData};
+use script_traits::{NewLayoutInfo, SWManagerMsg};
+use script_traits::{ScriptThreadFactory, TimerSchedulerMsg, WindowSizeData};
+use servo_config::opts::{self, Opts};
+use servo_config::{prefs, prefs::PrefValue};
+use servo_url::ServoUrl;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -100,9 +143,7 @@ pub struct Pipeline {
     /// The title of this pipeline's document.
     pub title: String,
 
-    /// The last compositor [`Epoch`] that was laid out in this pipeline if "exit after load" is
-    /// enabled.
-    pub layout_epoch: Epoch,
+    pub focus_sequence: FocusSequenceNumber,
 }
 
 /// Initial setup data needed to construct a pipeline.
@@ -374,7 +415,7 @@ impl Pipeline {
             history_states: HashSet::new(),
             completely_loaded: false,
             title: String::new(),
-            layout_epoch: Epoch(0),
+            focus_sequence: FocusSequenceNumber::default(),
         };
 
         pipeline.set_throttled(throttled);

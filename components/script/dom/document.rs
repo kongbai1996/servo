@@ -210,6 +210,70 @@ use crate::stylesheet_set::StylesheetSetRef;
 use crate::task::TaskBox;
 use crate::task_source::TaskSourceName;
 use crate::timers::OneshotTimerCallback;
+use canvas_traits::webgl::{self, WebGLContextId, WebGLMsg};
+use content_security_policy::{self as csp, CspList};
+use cookie::Cookie;
+use devtools_traits::ScriptToDevtoolsControlMsg;
+use dom_struct::dom_struct;
+use embedder_traits::EmbedderMsg;
+use encoding_rs::{Encoding, UTF_8};
+use euclid::default::{Point2D, Rect, Size2D};
+use html5ever::{LocalName, Namespace, QualName};
+use hyper_serde::Serde;
+use ipc_channel::ipc::{self, IpcSender};
+use js::jsapi::JSObject;
+use keyboard_types::{Code, Key, KeyState};
+use metrics::{
+    InteractiveFlag, InteractiveMetrics, InteractiveWindow, ProfilerMetadataFactory,
+    ProgressiveWebMetric,
+};
+use mime::{self, Mime};
+use msg::constellation_msg::BrowsingContextId;
+use net_traits::pub_domains::is_pub_domain;
+use net_traits::request::RequestBuilder;
+use net_traits::response::HttpsState;
+use net_traits::CookieSource::NonHTTP;
+use net_traits::CoreResourceMsg::{GetCookiesForUrl, SetCookiesForUrl};
+use net_traits::{FetchResponseMsg, IpcSend, ReferrerPolicy};
+use num_traits::ToPrimitive;
+use percent_encoding::percent_decode;
+use profile_traits::ipc as profile_ipc;
+use profile_traits::time::{TimerMetadata, TimerMetadataFrameType, TimerMetadataReflowType};
+use script_layout_interface::message::{Msg, PendingRestyle, ReflowGoal};
+use script_layout_interface::TrustedNodeAddress;
+use script_traits::FocusSequenceNumber;
+use script_traits::{AnimationState, DocumentActivity, MouseButton, MouseEventType};
+use script_traits::{
+    MsDuration, ScriptMsg, TouchEventType, TouchId, UntrustedNodeAddress, WheelDelta,
+};
+use servo_arc::Arc;
+use servo_atoms::Atom;
+use servo_config::pref;
+use servo_media::{ClientContextId, ServoMedia};
+use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
+use std::borrow::Cow;
+use std::cell::Cell;
+use std::cmp::Ordering;
+use std::collections::hash_map::Entry::{Occupied, Vacant};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::default::Default;
+use std::mem;
+use std::ptr::NonNull;
+use std::rc::Rc;
+use std::slice::from_ref;
+use std::time::{Duration, Instant};
+use style::attr::AttrValue;
+use style::context::QuirksMode;
+use style::invalidation::element::restyle_hints::RestyleHint;
+use style::media_queries::{Device, MediaType};
+use style::selector_parser::Snapshot;
+use style::shared_lock::SharedRwLock as StyleSharedRwLock;
+use style::str::{split_html_space_chars, str_join};
+use style::stylesheet_set::DocumentStylesheetSet;
+use style::stylesheets::{Origin, OriginSet, Stylesheet};
+use url::Host;
+use uuid::Uuid;
+use webrender_api::units::DeviceIntRect;
 
 /// The number of times we are allowed to see spurious `requestAnimationFrame()` calls before
 /// falling back to fake ones.
@@ -331,6 +395,8 @@ pub(crate) struct Document {
     focus_transaction: DomRefCell<Option<FocusTransaction>>,
     /// The element that currently has the document focus context.
     focused: MutNullableDom<Element>,
+    /// The last sequence number sent to the constellation.
+    focus_sequence: Cell<FocusSequenceNumber>,
     /// The top-level browsing context's system focus state.
     has_system_focus: Cell<bool>,
     /// The script element that is currently executing.
@@ -1107,6 +1173,26 @@ impl Document {
         self.focused.get()
     }
 
+    /// Get the last sequence number sent to the constellation.
+    ///
+    /// Received focus-related messages with sequence numbers less than the one
+    /// returned by this method must be discarded.
+    pub fn get_focus_sequence(&self) -> FocusSequenceNumber {
+        self.focus_sequence.get()
+    }
+
+    /// Generate the next sequence number for focus-related messages.
+    fn increment_fetch_focus_sequence(&self) -> FocusSequenceNumber {
+        self.focus_sequence.set(FocusSequenceNumber(
+            self.focus_sequence
+                .get()
+                .0
+                .checked_add(1)
+                .expect("too many focus messages have been sent"),
+        ));
+        self.focus_sequence.get()
+    }
+
     /// Respond to a possible change in the top-level browsing context's [system
     /// focus][1] state.
     ///
@@ -1250,8 +1336,23 @@ impl Document {
                     let child_browsing_context_id = elem
                         .downcast::<HTMLIFrameElement>()
                         .and_then(|iframe| iframe.browsing_context_id());
-                    self.window()
-                        .send_to_constellation(ScriptMsg::Focus(child_browsing_context_id));
+
+                    let sequence = self.increment_fetch_focus_sequence();
+
+                    debug!(
+                        "Advertising the focus request to the constellation \
+                        with sequence number {} and child browsing context ID {}",
+                        sequence,
+                        child_browsing_context_id
+                            .map(|id| id.to_string())
+                            .as_deref()
+                            .unwrap_or("(none)"),
+                    );
+
+                    self.window().send_to_constellation(ScriptMsg::Focus(
+                        child_browsing_context_id,
+                        sequence,
+                    ));
                 }
 
                 // Notify the embedder to display an input method.
@@ -3901,6 +4002,7 @@ impl Document {
             domcontentloaded_dispatched: Cell::new(domcontentloaded_dispatched),
             focus_transaction: DomRefCell::new(None),
             focused: Default::default(),
+            focus_sequence: Cell::new(FocusSequenceNumber::default()),
             has_system_focus: Cell::new(false),
             current_script: Default::default(),
             pending_parsing_blocking_script: Default::default(),
