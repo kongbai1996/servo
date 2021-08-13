@@ -791,7 +791,7 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
         doc.abort(can_gc);
     }
 
-    /// Implements <https://html.spec.whatwg.org/multipage/#dom-window-focus>.
+    // https://html.spec.whatwg.org/multipage/#dom-window-focus
     fn Focus(&self) {
         // > 1. Let `current` be this `Window` object's browsing context.
         // >
@@ -806,7 +806,7 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
         // TODO: All of them
     }
 
-    /// Implements <https://html.spec.whatwg.org/multipage/#dom-window-blur>.
+    // https://html.spec.whatwg.org/multipage/#dom-window-blur
     fn Blur(&self) {
         // > User agents are encouraged to ignore calls to this `blur()` method
         // > entirely.
