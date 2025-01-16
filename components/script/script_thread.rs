@@ -1093,7 +1093,13 @@ impl ScriptThread {
                     );
                 },
 
-                CompositorEvent::TouchEvent(event_type, identifier, point, node_address) => {
+                CompositorEvent::TouchEvent(
+                    event_type,
+                    identifier,
+                    point,
+                    node_address,
+                    action,
+                ) => {
                     let touch_result = self.handle_touch_event(
                         pipeline_id,
                         event_type,
@@ -1102,13 +1108,12 @@ impl ScriptThread {
                         node_address,
                         can_gc,
                     );
-                    match (event_type, touch_result) {
-                        (TouchEventType::Down, TouchEventResult::Processed(handled)) => {
+                    match touch_result {
+                        TouchEventResult::Processed(handled) => {
                             let result = if handled {
-                                // TODO: Wait to see if preventDefault is called on the first touchmove event.
-                                EventResult::DefaultAllowed
+                                EventResult::DefaultAllowed(action)
                             } else {
-                                EventResult::DefaultPrevented
+                                EventResult::DefaultPrevented(event_type)
                             };
                             let message = ScriptMsg::TouchEventProcessed(result);
                             self.senders

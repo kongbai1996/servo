@@ -56,7 +56,7 @@ use servo_url::{ImmutableOrigin, ServoUrl};
 use style_traits::{CSSPixel, SpeculativePainter};
 #[cfg(feature = "webgpu")]
 use webgpu::WebGPUMsg;
-use webrender_api::units::{DeviceIntSize, DevicePixel, LayoutPixel};
+use webrender_api::units::{DeviceIntSize, DevicePixel, DevicePoint, LayoutPixel};
 use webrender_api::{DocumentId, ExternalScrollId, ImageKey};
 use webrender_traits::{
     CrossProcessCompositorApi, UntrustedNodeAddress as WebRenderUntrustedNodeAddress,
@@ -483,6 +483,19 @@ pub enum TouchEventType {
     Cancel,
 }
 
+/// The action to take in response to a touch event
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub enum TouchAction {
+    /// Simulate a mouse click.
+    Click(DevicePoint),
+    /// Scroll by the provided offset.
+    Scroll(Vector2D<f32, DevicePixel>, DevicePoint),
+    /// Zoom by a magnification factor and scroll by the provided offset.
+    Zoom(f32, Vector2D<f32, DevicePixel>),
+    /// Don't do anything.
+    NoAction,
+}
+
 /// An opaque identifier for a touch point.
 ///
 /// <http://w3c.github.io/touch-events/#widl-Touch-identifier>
@@ -588,6 +601,7 @@ pub enum CompositorEvent {
         TouchId,
         Point2D<f32>,
         Option<UntrustedNodeAddress>,
+        TouchAction,
     ),
     /// A wheel event was generated with a delta in the X, Y, and/or Z directions
     WheelEvent(WheelDelta, Point2D<f32>, Option<UntrustedNodeAddress>),
