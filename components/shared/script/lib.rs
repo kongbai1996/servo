@@ -59,7 +59,7 @@ use servo_url::{ImmutableOrigin, ServoUrl};
 use style_traits::{CSSPixel, SpeculativePainter};
 #[cfg(feature = "webgpu")]
 use webgpu::WebGPUMsg;
-use webrender_api::units::{DeviceIntSize, DevicePixel, LayoutPixel};
+use webrender_api::units::{DeviceIntSize, DevicePixel, DevicePoint, LayoutPixel};
 use webrender_api::{DocumentId, ExternalScrollId, ImageKey};
 use webrender_traits::{
     CrossProcessCompositorApi, UntrustedNodeAddress as WebRenderUntrustedNodeAddress,
@@ -504,6 +504,7 @@ pub enum CompositorEvent {
         TouchId,
         Point2D<f32>,
         Option<UntrustedNodeAddress>,
+        TouchAction,
     ),
     /// A wheel event was generated with a delta in the X, Y, and/or Z directions
     WheelEvent(WheelDelta, Point2D<f32>, Option<UntrustedNodeAddress>),
