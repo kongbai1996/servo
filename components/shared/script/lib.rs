@@ -484,7 +484,7 @@ pub enum TouchEventType {
 }
 
 /// The action to take in response to a touch event
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub enum TouchAction {
     /// Simulate a mouse click.
     Click(DevicePoint),

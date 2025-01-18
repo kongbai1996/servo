@@ -1552,8 +1552,7 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
 
     fn on_touch_move(&mut self, identifier: TouchId, point: DevicePoint) {
         let action = self.touch_handler.on_touch_move(identifier, point);
-        if let TouchAction::NoAction = action {
-        } else {
+        if TouchAction::NoAction != action {
             self.send_touch_event(TouchEventType::Move, identifier, point, action);
         }
     }
