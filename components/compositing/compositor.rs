@@ -554,7 +554,7 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
             },
 
             CompositorMsg::TouchEventProcessed(result) => {
-                self.on_event_processed(result);
+                self.on_touch_event_processed(result);
             },
 
             CompositorMsg::CreatePng(page_rect, reply) => {
@@ -1573,7 +1573,7 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
         );
     }
 
-    fn on_event_processed(&mut self, result: EventResult) {
+    fn on_touch_event_processed(&mut self, result: EventResult) {
         match result {
             EventResult::DefaultPrevented(event_type) => {
                 match event_type {
