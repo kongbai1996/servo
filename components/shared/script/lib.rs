@@ -54,9 +54,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use servo_atoms::Atom;
 use servo_url::{ImmutableOrigin, ServoUrl};
 use style_traits::{CSSPixel, SpeculativePainter};
+use touch_traits::TouchAction;
 #[cfg(feature = "webgpu")]
 use webgpu::WebGPUMsg;
-use webrender_api::units::{DeviceIntSize, DevicePixel, DevicePoint, LayoutPixel};
+use webrender_api::units::{DeviceIntSize, DevicePixel, LayoutPixel};
 use webrender_api::{DocumentId, ExternalScrollId, ImageKey};
 use webrender_traits::{
     CrossProcessCompositorApi, UntrustedNodeAddress as WebRenderUntrustedNodeAddress,
@@ -481,19 +482,6 @@ pub enum TouchEventType {
     Up,
     /// The system stopped tracking a touch point.
     Cancel,
-}
-
-/// The action to take in response to a touch event
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-pub enum TouchAction {
-    /// Simulate a mouse click.
-    Click(DevicePoint),
-    /// Scroll by the provided offset.
-    Scroll(Vector2D<f32, DevicePixel>, DevicePoint),
-    /// Zoom by a magnification factor and scroll by the provided offset.
-    Zoom(f32, Vector2D<f32, DevicePixel>),
-    /// Don't do anything.
-    NoAction,
 }
 
 /// An opaque identifier for a touch point.

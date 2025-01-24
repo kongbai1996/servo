@@ -32,11 +32,12 @@ use profile_traits::time_profile;
 use script_traits::CompositorEvent::{MouseButtonEvent, MouseMoveEvent, TouchEvent, WheelEvent};
 use script_traits::{
     AnimationState, AnimationTickType, ConstellationControlMsg, EventResult, MouseButton,
-    MouseEventType, ScrollState, TouchAction, TouchEventType, TouchId, WheelDelta, WindowSizeData,
+    MouseEventType, ScrollState, TouchEventType, TouchId, WheelDelta, WindowSizeData,
     WindowSizeType,
 };
 use servo_geometry::{DeviceIndependentPixel, FramebufferUintLength};
 use style_traits::{CSSPixel, PinchZoomFactor};
+use touch_traits::TouchAction;
 use webrender::{CaptureBits, RenderApi, Transaction};
 use webrender_api::units::{
     DeviceIntPoint, DeviceIntSize, DevicePixel, DevicePoint, DeviceRect, LayoutPoint, LayoutRect,
@@ -1592,6 +1593,9 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
                         if !self.touch_handler.prevent_click {
                             self.simulate_mouse_click(point);
                         }
+                    },
+                    TouchAction::Flinging(velocity, point) => {
+                        self.touch_handler.on_fling(velocity, point);
                     },
                     TouchAction::Scroll(delta, point) => self.on_scroll_window_event(
                         ScrollLocation::Delta(LayoutVector2D::from_untyped(delta.to_untyped())),
