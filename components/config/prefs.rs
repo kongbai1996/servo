@@ -266,7 +266,7 @@ impl Preferences {
             dom_servo_helpers_enabled: false,
             dom_servoparser_async_html_tokenizer_enabled: false,
             dom_shadowdom_enabled: false,
-            dom_svg_enabled: false,
+            dom_svg_enabled: true,
             dom_testable_crash_enabled: false,
             dom_testbinding_enabled: false,
             dom_testbinding_prefcontrolled2_enabled: false,
