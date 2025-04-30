@@ -1196,7 +1196,7 @@ impl Document {
     ) {
         // If an element is specified, and it's non-focusable, ignore the
         // request.
-        if !elem.is_none_or(|e| e.is_focusable_area()) {
+        if elem.is_some_and(|e| !e.is_focusable_area()) {
             return;
         }
 
@@ -1553,7 +1553,6 @@ impl Document {
             }
 
             self.begin_focus_transaction();
-            // self.request_focus(Some(&*el), FocusType::Element, can_gc);
             // Try to focus `el`. If it's not focusable, focus the document
             // instead.
             self.request_focus(None, FocusInitiator::Local, can_gc);
@@ -3423,8 +3422,7 @@ impl Document {
         );
         let event = event.upcast::<Event>();
         event.set_trusted(true);
-        let target = event_target.upcast();
-        event.fire(target, can_gc);
+        event.fire(event_target, can_gc);
     }
 
     /// <https://html.spec.whatwg.org/multipage/#cookie-averse-document-object>
@@ -4053,7 +4051,6 @@ impl Document {
             stylesheet_list: MutNullableDom::new(None),
             ready_state: Cell::new(ready_state),
             domcontentloaded_dispatched: Cell::new(domcontentloaded_dispatched),
-            // focus_transaction: DomRefCell::new(FocusTransaction::NotInTransaction),
             focus_transaction: DomRefCell::new(None),
             focused: Default::default(),
             focus_sequence: Cell::new(FocusSequenceNumber::default()),
