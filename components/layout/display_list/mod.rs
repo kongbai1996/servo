@@ -12,6 +12,7 @@ use compositing_traits::display_list::{CompositorDisplayListInfo, SpatialTreeNod
 use euclid::{Point2D, Scale, SideOffsets2D, Size2D, UnknownUnit, Vector2D};
 use fonts::GlyphStore;
 use gradient::WebRenderGradient;
+use layout_api::IFrameSizes;
 use net_traits::image_cache::Image as CachedImage;
 use range::Range as ServoRange;
 use servo_arc::Arc as ServoArc;
@@ -114,6 +115,9 @@ pub(crate) struct DisplayListBuilder<'a> {
 
     /// The device pixel ratio used for this `Document`'s display list.
     device_pixel_ratio: Scale<f32, StyloCSSPixel, StyloDevicePixel>,
+
+    /// A mutable reference to the iframe sizes map that is used to track the sizes of iframes.
+    iframe_sizes: &'a mut IFrameSizes,
 }
 
 struct InspectorHighlight {
@@ -162,6 +166,7 @@ impl DisplayListBuilder<'_> {
         device_pixel_ratio: Scale<f32, StyloCSSPixel, StyloDevicePixel>,
         highlighted_dom_node: Option<OpaqueNode>,
         debug: &DebugOptions,
+        iframe_sizes: &mut IFrameSizes,
     ) -> BuiltDisplayList {
         // Build the rest of the display list which inclues all of the WebRender primitives.
         let compositor_info = &mut stacking_context_tree.compositor_info;
@@ -192,6 +197,7 @@ impl DisplayListBuilder<'_> {
             clip_map: Default::default(),
             image_resolver,
             device_pixel_ratio,
+            iframe_sizes,
         };
 
         builder.add_all_spatial_nodes();
@@ -636,6 +642,15 @@ impl Fragment {
                     Visibility::Visible => {
                         builder.mark_is_contentful();
                         let rect = iframe.rect.translate(containing_block.origin.to_vector());
+                        builder
+                            .iframe_sizes
+                            .get_mut(&iframe.browsing_context_id)
+                            .map(|iframe_size| {
+                                iframe_size.viewport_details.offset = PhysicalPoint::new(
+                                    rect.origin.x.to_f32_px(),
+                                    rect.origin.y.to_f32_px(),
+                                );
+                            });
 
                         let common = builder.common_properties(rect.to_webrender(), &iframe.style);
                         builder.wr().push_iframe(

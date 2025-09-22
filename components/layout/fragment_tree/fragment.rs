@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use app_units::Au;
-use base::id::PipelineId;
+use base::id::{BrowsingContextId, PipelineId};
 use base::print_tree::PrintTree;
 use euclid::{Point2D, Rect, Size2D, UnknownUnit};
 use fonts::{ByteIndex, FontMetrics, GlyphStore};
@@ -89,6 +89,7 @@ pub(crate) struct ImageFragment {
 #[derive(MallocSizeOf)]
 pub(crate) struct IFrameFragment {
     pub base: BaseFragment,
+    pub browsing_context_id: BrowsingContextId,
     pub pipeline_id: PipelineId,
     pub rect: PhysicalRect<Au>,
     pub style: ServoArc<ComputedValues>,

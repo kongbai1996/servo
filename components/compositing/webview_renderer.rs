@@ -961,6 +961,7 @@ impl WebViewRenderer {
             ViewportDetails {
                 hidpi_scale_factor: device_pixel_ratio,
                 size: initial_viewport,
+                offset: Point2D::new(0.0, 0.0), // Always (0,0) for the main viewport.
             },
             WindowSizeType::Resize,
         );

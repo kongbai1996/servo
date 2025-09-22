@@ -181,6 +181,7 @@ impl WebView {
         let scaled_viewport_size = inner.rect.size() / inner.hidpi_scale_factor;
         ViewportDetails {
             size: scaled_viewport_size / Scale::new(1.0),
+            offset: Point2D::default(),
             hidpi_scale_factor: Scale::new(inner.hidpi_scale_factor.0),
         }
     }

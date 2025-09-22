@@ -833,7 +833,7 @@ impl LayoutThread {
             animation_timeline_value: reflow_request.animation_timeline_value,
         });
 
-        let (mut reflow_phases_run, damage, iframe_sizes) = self.restyle_and_build_trees(
+        let (mut reflow_phases_run, damage, mut iframe_sizes) = self.restyle_and_build_trees(
             &mut reflow_request,
             document,
             root_element,
@@ -845,7 +845,7 @@ impl LayoutThread {
         if self.build_stacking_context_tree_for_reflow(&reflow_request, damage) {
             reflow_phases_run.insert(ReflowPhasesRun::BuiltStackingContextTree);
         }
-        if self.build_display_list(&reflow_request, damage, &image_resolver) {
+        if self.build_display_list(&reflow_request, damage, &image_resolver, &mut iframe_sizes) {
             reflow_phases_run.insert(ReflowPhasesRun::BuiltDisplayList);
         }
         if self.handle_update_scroll_node_request(&reflow_request) {
@@ -1203,6 +1203,7 @@ impl LayoutThread {
         reflow_request: &ReflowRequest,
         damage: RestyleDamage,
         image_resolver: &Arc<ImageResolver>,
+        iframe_sizes: &mut IFrameSizes,
     ) -> bool {
         if !ReflowPhases::necessary(&reflow_request.reflow_goal)
             .contains(ReflowPhases::DisplayListConstruction)
@@ -1237,6 +1238,7 @@ impl LayoutThread {
             self.device().device_pixel_ratio(),
             reflow_request.highlighted_dom_node,
             &self.debug,
+            iframe_sizes,
         );
         self.compositor_api.send_display_list(
             self.webview_id,

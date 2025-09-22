@@ -389,6 +389,7 @@ impl ReplacedContents {
                         pipeline_id: iframe.pipeline_id,
                         viewport_details: ViewportDetails {
                             size,
+                            offset: PhysicalPoint::default(),
                             hidpi_scale_factor: Scale::new(hidpi_scale_factor.0),
                         },
                     },
@@ -396,6 +397,7 @@ impl ReplacedContents {
                 vec![Fragment::IFrame(ArcRefCell::new(IFrameFragment {
                     base: self.base_fragment_info.into(),
                     style: style.clone(),
+                    browsing_context_id: iframe.browsing_context_id,
                     pipeline_id: iframe.pipeline_id,
                     rect,
                 }))]

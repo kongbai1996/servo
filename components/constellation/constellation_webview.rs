@@ -9,6 +9,7 @@ use log::warn;
 use rustc_hash::FxHashMap;
 use script_traits::{ConstellationInputEvent, ScriptThreadMessage};
 use style_traits::CSSPixel;
+use webrender_api::units::DevicePoint;
 
 use crate::browsingcontext::BrowsingContext;
 use crate::pipeline::Pipeline;
@@ -83,7 +84,7 @@ impl ConstellationWebView {
 
     pub(crate) fn forward_input_event(
         &mut self,
-        event: ConstellationInputEvent,
+        mut event: ConstellationInputEvent,
         pipelines: &FxHashMap<PipelineId, Pipeline>,
         browsing_contexts: &FxHashMap<BrowsingContextId, BrowsingContext>,
     ) {
@@ -144,8 +145,55 @@ impl ConstellationWebView {
                 .point_in_viewport;
         }
 
+        // If the event has a device point, convert it to the layout viewport of the target pipeline.
+        if let Some(device_point) = event.event.point() {
+            if let Some(hit_test_result) = &mut event.hit_test_result {
+                let point_in_viewport = self.convert_device_point_to_layout_view_point(
+                    device_point,
+                    pipeline.browsing_context_id,
+                    pipelines,
+                    browsing_contexts,
+                );
+                hit_test_result.point_in_viewport = point_in_viewport;
+            }
+        }
+
         let _ = pipeline
             .event_loop
             .send(ScriptThreadMessage::SendInputEvent(pipeline.id, event));
+    }
+
+    /// Convert a point in device pixels to the layout viewport of the given browsing context.
+    /// This walks up the browsing context tree, subtracting the offsets of each viewport
+    /// and dividing by the HiDPI scale factor at each level.
+    /// If we encounter a browsing context or pipeline that is not known, we return the point
+    /// in the current viewport.
+    /// If we walk all the way to the top, we return the point in the top-level viewport.
+    fn convert_device_point_to_layout_view_point(
+        &self,
+        device_point: DevicePoint,
+        mut current_browsing_context_id: BrowsingContextId,
+        pipelines: &FxHashMap<PipelineId, Pipeline>,
+        browsing_contexts: &FxHashMap<BrowsingContextId, BrowsingContext>,
+    ) -> Point2D<f32, CSSPixel> {
+        let mut device_point_in_viewport = device_point;
+        while let Some(browsing_context) = browsing_contexts.get(&current_browsing_context_id) {
+            let device_offset_of_parent_viewport = browsing_context.viewport_details.offset *
+                browsing_context.viewport_details.hidpi_scale_factor;
+            device_point_in_viewport -= device_offset_of_parent_viewport.to_vector();
+            if let Some(parent_pipeline_id) = browsing_context.parent_pipeline_id {
+                if let Some(parent_pipeline) = pipelines.get(&parent_pipeline_id) {
+                    current_browsing_context_id = parent_pipeline.browsing_context_id;
+                    continue;
+                } else {
+                    return device_point_in_viewport /
+                        browsing_context.viewport_details.hidpi_scale_factor;
+                }
+            } else {
+                return device_point_in_viewport /
+                    browsing_context.viewport_details.hidpi_scale_factor;
+            }
+        }
+        Point2D::default()
     }
 }

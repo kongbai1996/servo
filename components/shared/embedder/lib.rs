@@ -317,6 +317,9 @@ pub struct ViewportDetails {
     /// The size of the layout viewport.
     pub size: Size2D<f32, CSSPixel>,
 
+    /// The offset of the layout viewport within the parent viewport.
+    pub offset: Point2D<f32, CSSPixel>,
+
     /// The scale factor to use to account for HiDPI scaling. This does not take into account
     /// any page or pinch zoom applied by the compositor to the contents.
     pub hidpi_scale_factor: Scale<f32, CSSPixel, DevicePixel>,
